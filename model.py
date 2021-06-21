@@ -5,58 +5,107 @@ import torch.nn as nn
 from torch.nn import init
 from torch.optim import lr_scheduler
 
-
 class ResNet(nn.Module):
-    def __init__(self, nch_in, nch_out, nch_ker=64, norm='bnorm', nblk=6):
+    def __init__(self, nch_in, nch_out, nch_ker=64, norm='inorm', nblk=6):
+        assert(nblk>=0)
         super(ResNet, self).__init__()
-
         self.nch_in = nch_in
         self.nch_out = nch_out
         self.nch_ker = nch_ker
         self.norm = norm
         self.nblk = nblk
 
-        if norm == 'bnorm':
-            self.bias = False
-        else:
-            self.bias = True
+        # 210621 Check norm working correctly
+        self.bias = False if norm == 'bnorm' else True
 
-        self.enc1 = CNR2d(self.nch_in,      1 * self.nch_ker, kernel_size=7, stride=1, padding=3, norm=self.norm, relu=0.0)
+        encblk = []
+        encblk += [Padding(3, padding_mode='reflection')]
+        encblk += [CNR2d(nch_in=nch_in, nch_out=nch_ker, kernel_size=7, stride=1, padding=0, norm=norm, relu=0.0)]
 
-        self.enc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+        # Down-Sampling
+        nds = 2
+        for i in range(nds):
+            mult = 2**i
+            encblk += [Padding(1, padding_mode='reflection')]
+            encblk += [CNR2d(nch_ker*mult, nch_ker*mult, kernel_size=3, stride=2, padding=0, norm=norm, relu=0.0)]
 
-        self.enc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+        # Down-Sample Residual Blocks
+        mult = 2**nds
+        for i in range(nblk):
+            encblk += [ResBlock(nch_ker*mult,nch_ker*mult)]
 
-        if self.nblk:
-            res = []
+        # Class Activation Map
+        self.gap_fc = Linear(nch_ker*mult, 1)
+        self.gmp_fc = Linear(nch_ker*mult, 1)
+        self.conv1x1 = Conv2d(nch_ker*mult*2, nch_ker*mult, kernel_size=1, stride=1, bias=True)
+        self.relu = ReLU(0.0)
 
-            for i in range(self.nblk):
-                res += [ResBlock(4 * self.nch_ker, 4 * self.nch_ker, kernel_size=3, stride=1, padding=1, norm=self.norm, relu=0.0, padding_mode='reflection')]
+## How to get imgae size in model.py
+        # Gamma, Beta Block
+        FC = []
+        FC += [Linear()]
+        FC += [ReLU(0.0)]
+        FC += [Linear()]
+        FC += [ReLU(0.0)]
+        self.gamma = Linear(nch_ker*mult, nch_ker*mult)
+        self.beta = Linear(nch_ker*mult, nch_ker*mult)
 
-            self.res = nn.Sequential(*res)
 
-        self.dec3 = DECNR2d(4 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
 
-        self.dec2 = DECNR2d(2 * self.nch_ker, 1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+        self.encblk = nn.Sequential(*encblk)
+        self.FC = nn.Sequential(*FC)
+        self.decblk = nn.Sequential(*decblk)
 
-        self.dec1 = CNR2d(1 * self.nch_ker, self.nch_out, kernel_size=7, stride=1, padding=3, norm=[], relu=[], bias=False)
-
-    def forward(self, x):
-        x = self.enc1(x)
-        x = self.enc2(x)
-        x = self.enc3(x)
-
-        if self.nblk:
-            x = self.res(x)
-
-        x = self.dec3(x)
-        x = self.dec2(x)
-        x = self.dec1(x)
-
-        x = torch.tanh(x)
-
-        return x
-
+# class ResNet(nn.Module):
+#     def __init__(self, nch_in, nch_out, nch_ker=64, norm='bnorm', nblk=6):
+#         super(ResNet, self).__init__()
+#
+#         self.nch_in = nch_in
+#         self.nch_out = nch_out
+#         self.nch_ker = nch_ker
+#         self.norm = norm
+#         self.nblk = nblk
+#
+#         if norm == 'bnorm':
+#             self.bias = False
+#         else:
+#             self.bias = True
+#
+#         self.enc1 = CNR2d(self.nch_in,      1 * self.nch_ker, kernel_size=7, stride=1, padding=3, norm=self.norm, relu=0.0)
+#
+#         self.enc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+#
+#         self.enc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+#
+#         if self.nblk:
+#             res = []
+#
+#             for i in range(self.nblk):
+#                 res += [ResBlock(4 * self.nch_ker, 4 * self.nch_ker, kernel_size=3, stride=1, padding=1, norm=self.norm, relu=0.0, padding_mode='reflection')]
+#
+#             self.res = nn.Sequential(*res)
+#
+#         self.dec3 = DECNR2d(4 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+#
+#         self.dec2 = DECNR2d(2 * self.nch_ker, 1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.0)
+#
+#         self.dec1 = CNR2d(1 * self.nch_ker, self.nch_out, kernel_size=7, stride=1, padding=3, norm=[], relu=[], bias=False)
+#
+#     def forward(self, x):
+#         x = self.enc1(x)
+#         x = self.enc2(x)
+#         x = self.enc3(x)
+#
+#         if self.nblk:
+#             x = self.res(x)
+#
+#         x = self.dec3(x)
+#         x = self.dec2(x)
+#         x = self.dec1(x)
+#
+#         x = torch.tanh(x)
+#
+#         return x
 
 
 class Discriminator(nn.Module):

@@ -2,6 +2,115 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ResBlock(nn.Module):
+    def __init__(self, nch_in, nch_out, kernel_size=3, stride=1, padding=1, padding_mode='reflection', norm='inorm', relu=0.0, drop=[], bias=[]):
+        super().__init__()
+
+        if bias == []:
+            if norm == 'bnorm':
+                bias = False
+            else:
+                bias = True
+
+        layers = []
+
+        # 1st conv
+        layers += [Padding(padding, padding_mode=padding_mode)]
+        layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm=norm, relu=relu)]
+
+        if drop != []:
+            layers += [nn.Dropout2d(drop)]
+
+        # 2nd conv
+        layers += [Padding(padding, padding_mode=padding_mode)]
+        layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm=norm, relu=[])]
+
+        self.resblk = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return x + self.resblk(x)
+
+
+## 210621
+# ModulList
+class Ada_ResBlock(nn.Module):
+    def __init__(self, nch_in, nch_out, kernel_size=3, stride=1, padding=1, padding_mode='reflection', norm='inorm', relu=0.0, drop=[], bias=[]):
+        super(Ada_ResBlock, self).__init__()
+
+        # layers = []
+        #
+        # # 1st conv
+        # layers += [Padding(padding, padding_mode=padding_mode)]
+        # layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm='adaILN', relu=relu)]
+        #
+        # if drop != []:
+        #     layers += [nn.Dropout2d(drop)]
+        #
+        # # 2nd conv
+        # layers += [Padding(padding,padding_mode=padding_mode)]
+        # layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm='adaILN', relu=[])]
+        #
+        # self.AdaResblk = nn.Sequential(*layers)
+
+        self.pad1 = Padding(padding, padding_mode=padding_mode)
+        self.conv1 = Conv2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0)
+        self.norm1 = adaILN(nch_out)
+        self.relu1 = ReLU(relu)
+
+        self.pad2 = Padding(padding, padding_mode=padding_mode)
+        self.conv2 = Conv2d(nch_out, nch_out, kernel_size=kernel_size, stride=stride, padding=0)
+        self.norm2 = adaILN(nch_out)
+
+
+    def forward(self, x, gamma, beta):
+        out = self.pad1(x)
+        out = self.conv1(out)
+        out = self.norm1(out, gamma, beta)
+        out = self.relu1(out)
+        out = self.pad2(out)
+        out = self.conv2(out)
+        out = self.norm2(out, gamma, beta)
+        return x + out
+
+
+## rho.data.fill_
+# expand
+class adaILN(nn.Module):
+    def __init__(self, nch_ker, eps=1e-5):
+        super(adaILN, self).__init__()
+        self.eps = eps
+        self.rho = nn.Parameter(torch.Tensor(1, nch_ker,1,1))
+        self.rho.data.fill_(0.9)
+
+    def forward(self, input, gamma, beta):
+        in_mean, in_var = torch.mean(input, dim=[2, 3], keepdim=True), torch.var(input, dim=[2, 3], keepdim=True)
+        out_in = (input - in_mean) / torch.sqrt(in_var + self.eps)
+        ln_mean, ln_var = torch.mean(input, dim=[1, 2, 3], keepdim=True), torch.var(input, dim=[1, 2, 3], keepdim=True)
+        out_ln = (input - ln_mean) / torch.sqrt(ln_var + self.eps)
+        out = self.rho.expand(input.shape[0], -1, -1, -1) * out_in + (1-self.rho.expand(input.shape[0], -1, -1, -1)) * out_ln
+        out = out * gamma.unsqueeze(2).unsqueeze(3) + beta.unsqueeze(2).unsqueeze(3)
+        return out
+
+
+class ILN(nn.Module):
+    def __init__(self, nch_ker, eps=1e-5):
+        super(ILN, self).__init__()
+        self.eps = eps
+        self.rho = nn.Parameter(torch.Tensor(1, nch_ker, 1, 1))
+        self.gamma = nn.Parameter(torch.Tensor(1, nch_ker, 1, 1))
+        self.beta = nn.Parameter(torch.Tensor(1, nch_ker, 1, 1))
+        self.rho.data.fill_(0.0)
+        self.gamma.data.fill_(1.0)
+        self.beta.data.fill_(0.0)
+
+    def forward(self, input):
+        in_mean, in_var = torch.mean(input, dim=[2, 3], keepdim=True), torch.var(input, dim=[2, 3], keepdim=True)
+        out_in = (input - in_mean) / torch.sqrt(in_var + self.eps)
+        ln_mean, ln_var = torch.mean(input, dim=[1, 2, 3], keepdim=True), torch.var(input, dim=[1, 2, 3], keepdim=True)
+        out_ln = (input - ln_mean) / torch.sqrt(ln_var + self.eps)
+        out = self.rho.expand(input.shape[0], -1, -1, -1) * out_in + (1-self.rho.expand(input.shape[0], -1, -1, -1)) * out_ln
+        out = out * self.gamma.expand(input.shape[0], -1, -1, -1) + self.beta.expand(input.shape[0], -1, -1, -1)
+        return out
 
 class CNR2d(nn.Module):
     def __init__(self, nch_in, nch_out, kernel_size=4, stride=1, padding=1, norm='bnorm', relu=0.0, drop=[], bias=[]):
@@ -57,77 +166,6 @@ class DECNR2d(nn.Module):
 
     def forward(self, x):
         return self.decbr(x)
-
-
-class ResBlock(nn.Module):
-    def __init__(self, nch_in, nch_out, kernel_size=3, stride=1, padding=1, padding_mode='reflection', norm='inorm', relu=0.0, drop=[], bias=[]):
-        super().__init__()
-
-        if bias == []:
-            if norm == 'bnorm':
-                bias = False
-            else:
-                bias = True
-
-        layers = []
-
-        # 1st conv
-        layers += [Padding(padding, padding_mode=padding_mode)]
-        layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm=norm, relu=relu)]
-
-        if drop != []:
-            layers += [nn.Dropout2d(drop)]
-
-        # 2nd conv
-        layers += [Padding(padding, padding_mode=padding_mode)]
-        layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm=norm, relu=[])]
-
-        self.resblk = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return x + self.resblk(x)
-
-
-## 210621
-class Ada_ResBlock(nn.Moduel):
-    def __init__(self, nch_in, nch_out, kernel_size=3, stride=1, padding=1, padding_mode='reflection', norm='inorm', relu=0.0, drop=[], bias=[]):
-        super(Ada_ResBlock, self).__init__()
-
-        # layers = []
-        #
-        # # 1st conv
-        # layers += [Padding(padding, padding_mode=padding_mode)]
-        # layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm='adaILN', relu=relu)]
-        #
-        # if drop != []:
-        #     layers += [nn.Dropout2d(drop)]
-        #
-        # # 2nd conv
-        # layers += [Padding(padding,padding_mode=padding_mode)]
-        # layers += [CNR2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0, norm='adaILN', relu=[])]
-        #
-        # self.AdaResblk = nn.Sequential(*layers)
-
-        self.pad1 = Padding(padding, padding_mode=padding_mode)
-        self.conv1 = Conv2d(nch_in, nch_out, kernel_size=kernel_size, stride=stride, padding=0)
-        self.norm1 = adaILN(nch_out)
-        self.relu1 = ReLU(relu)
-
-        self.pad2 = Padding(padding, padding_mode=padding_mode)
-        self.conv2 = Conv2d(nch_out, nch_out, kernel_size=kernel_size, stride=stride, padding=0)
-        self.norm2 = adaILN(nch_out)
-
-
-    def forward(self, x, gamma, beta):
-        out = self.pad1(x)
-        out = self.conv1(out)
-        out = self.norm1(out, gamma, beta)
-        out = self.relu1(out)
-        out = self.pad2(out)
-        out = self.conv2(out)
-        out = self.norm2(out, gamma, beta)
-        return x + out
-
 
 
 class CNR1d(nn.Module):
