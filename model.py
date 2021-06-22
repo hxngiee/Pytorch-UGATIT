@@ -6,7 +6,7 @@ from torch.nn import init
 from torch.optim import lr_scheduler
 
 class ResNet(nn.Module):
-    def __init__(self, nch_in, nch_out, nch_ker=64, norm='inorm', nblk=6):
+    def __init__(self, nch_in, nch_out, nch_ker=64, norm='inorm', nblk=6, img_size=256):
         assert(nblk>=0)
         super(ResNet, self).__init__()
         self.nch_in = nch_in
@@ -43,19 +43,63 @@ class ResNet(nn.Module):
 ## How to get imgae size in model.py
         # Gamma, Beta Block
         FC = []
-        FC += [Linear()]
+        FC += [Linear(img_size // mult * img_size // mult * nch_ker * mult, nch_ker*mult)]
         FC += [ReLU(0.0)]
-        FC += [Linear()]
+        FC += [Linear(nch_ker*mult, nch_ker*mult)]
         FC += [ReLU(0.0)]
         self.gamma = Linear(nch_ker*mult, nch_ker*mult)
         self.beta = Linear(nch_ker*mult, nch_ker*mult)
 
+## setattr
+        # Up-Sample Residual Blocks
+        for i in range(nblk):
+            setattr(self, 'UpBlock1_' + str(i+1), Ada_ResBlock(nch_ker*mult))
 
+        decblk = []
+        for i in range(nds):
+            mult = 2**(nds - i)
+            decblk += [nn.Upsample(scale_factor=2, mode='nearest'),
+                       Padding(1,'reflection')
+                       Conv2d(nch_ker*mult, int(nch_ker*mult/2), kernel_size=3, stride=1, padding=0)
+                       ILN(int(nch_ker*mult/2)),
+                       ReLU(0.0)]
+        decblk += [Padding(3,'reflection'),
+                   Conv2d(nch_ker, nch_out, kernel_size=7, stride=1, padding=0),
+                   nn.Tanh()]
 
         self.encblk = nn.Sequential(*encblk)
         self.FC = nn.Sequential(*FC)
         self.decblk = nn.Sequential(*decblk)
 
+    def forward(self, x):
+        x = self.encblk(x)
+## adaptive_avg_pool
+        gap = torch.nn.functional.adaptive_avg_pool2d(x, 1)
+        gap_logit = self.gap_fc(gap.view(x.shape[0], -1))
+        gap_weight = list(self.gap_fc.parameters())[0]
+        gap = x * gap_weight.unsqueeze(2).unsqueeze(3)
+        
+        gmp = torch.nn.functional.adaptive_max_pool2d(x, 1)
+        gmp_logit = self.gmp_fc(gmp.view(x.shape[0], -1))
+        gmp_weight = list(self.gmp_fc.parameters())[0]
+        gmp = x * gmp_weight.unsqueeze(2).unsqueeze(3)
+        
+        cam_logit = torch.cat([gap_logit, gmp_logit], 1)
+        x = torch.cat([gap, gmp], 1)
+        x = self.relu(self.conv1x1(x))
+## keepdim
+        heatmap = torch.sum(x, dim=1, keepdim=True)
+        
+        x_ = self.FC(x.view(x.shape[0], -1))
+        gamma, beta = self.gamma(x_), self.beta(x_)
+
+## getattr()
+        for i in range(self.nblk):
+            x = getattr(self, 'UpBlock1_' + str(i+1))(x, gamma, beta)
+        out = self.decblk(x)
+        return out, cam_logit, heatmap
+    
+    
 # class ResNet(nn.Module):
 #     def __init__(self, nch_in, nch_out, nch_ker=64, norm='bnorm', nblk=6):
 #         super(ResNet, self).__init__()
@@ -106,6 +150,62 @@ class ResNet(nn.Module):
 #         x = torch.tanh(x)
 #
 #         return x
+
+
+##
+class Discriminator(nn.Module):
+    def __init__(self, nch_in, nch_ker=64, n_layers=5):
+        super(Discriminator, self).__init__()
+        encblk = [Padding(1,'reflection'),
+                  nn.utils.spectral_norm(
+                      Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
+                  ReLU(0.2)]
+
+        for i in range(1, n_layers - 2):
+            mult = 2 ** (i-1)
+            encblk += [Padding(1,'reflection'),
+                       nn.utils.spectral_norm(
+                           Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=2, padding=0)),
+                       ReLU(0.2)]
+
+## -3?
+        mult = 2 ** (n_layers - 2 - 1)
+        encblk += [Padding(1,'reflection'),
+                   nn.utils.spectral_norm(
+                       Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=1, padding=0)),
+                   ReLU(0.2)]
+
+        mult = 2 ** (n_layers -2)
+        self.gap_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
+        self.gmp_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
+        self.conv1x1 = Conv2d(nch_ker*mult*2, nch_ker*mult, kernel_size=1, stride=1)
+        self.leaky_relu = ReLU(0.2)
+
+        self.pad = Padding(1,'reflection')
+        self.conv = nn.utils.spectral_norm(Conv2d(nch_ker*mult, 1, kernel_size=4, stride=1, padding=0))
+        self.encblk = nn.Sequential(*encblk)
+
+    def forward(self, x):
+        x = self.encblk(x)
+
+        gap = torch.nn.functional.adaptive_avg_pool2d(x,1)
+        gap_logit = self.gap_fc(gap.view(x.shape[0],-1))
+        gap_weight = list(self.gap_fc.parameters())[0]
+        gap = x * gap_weight.unsqueeze(2).unsqueeze(3)
+
+        gmp = torch.nn.functional.adaptive_max_pool2d(x, 1)
+        gmp_logit = self.gmp_fc(gmp.view(x.shape[0],-1))
+        gmp_weight = list(self.gmp_fc.parameters())[0]
+        gmp = x * gmp_weight.unsqueeze(2).unsqueeze(3)
+
+        cam_logt = torch.cat([gap_logit, gmp_logit], 1)
+        x = torch.cat([gap,gmp], 1)
+        x = self.leaky_relu(self.conv1x1(x))
+        heatmap = torch.sum(x, dim=1, keepdim=True)
+
+        x = self.pad(x)
+        out = self.conv(x)
+        return out, cam_logt, heatmap
 
 
 class Discriminator(nn.Module):

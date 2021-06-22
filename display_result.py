@@ -4,7 +4,7 @@ import torch
 import torchvision.utils as vutils
 import matplotlib.pyplot as plt
 
-dir_result = './results/cyclegan/monet2photo/images'
+dir_result = './results/ugatit/selfie2anime/images'
 lst_result = os.listdir(dir_result)
 
 nx = 256
