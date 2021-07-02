@@ -53,14 +53,17 @@ class ResNet(nn.Module):
 ## setattr
         # Up-Sample Residual Blocks
         for i in range(nblk):
-            setattr(self, 'UpBlock1_' + str(i+1), Ada_ResBlock(nch_ker*mult))
+            setattr(self, 'UpBlock1_' + str(i+1), Ada_ResBlock(nch_ker*mult,nch_ker*mult))
+
+# def __init__(self, nch_in, nch_out, kernel_size=3, stride=1, padding=1, padding_mode='reflection', norm='inorm',
+#                      relu=0.0, drop=[], bias=[]):
 
         decblk = []
         for i in range(nds):
             mult = 2**(nds - i)
             decblk += [nn.Upsample(scale_factor=2, mode='nearest'),
-                       Padding(1,'reflection')
-                       Conv2d(nch_ker*mult, int(nch_ker*mult/2), kernel_size=3, stride=1, padding=0)
+                       Padding(1,'reflection'),
+                       Conv2d(nch_ker*mult, int(nch_ker*mult/2), kernel_size=3, stride=1, padding=0),
                        ILN(int(nch_ker*mult/2)),
                        ReLU(0.0)]
         decblk += [Padding(3,'reflection'),
@@ -158,31 +161,36 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         encblk = [Padding(1,'reflection'),
                   nn.utils.spectral_norm(
-                      Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
+                      nn.Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
+                      # Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
                   ReLU(0.2)]
 
         for i in range(1, n_layers - 2):
             mult = 2 ** (i-1)
             encblk += [Padding(1,'reflection'),
                        nn.utils.spectral_norm(
-                           Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=2, padding=0)),
+                       nn.Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
+                       # Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=2, padding=0)),
                        ReLU(0.2)]
 
 ## -3?
         mult = 2 ** (n_layers - 2 - 1)
         encblk += [Padding(1,'reflection'),
                    nn.utils.spectral_norm(
-                       Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=1, padding=0)),
+                       nn.Conv2d(nch_in, nch_ker, kernel_size=4, stride=2, padding=0)),
+                       # Conv2d(nch_ker*mult, nch_ker*mult*2, kernel_size=4, stride=1, padding=0)),
                    ReLU(0.2)]
 
         mult = 2 ** (n_layers -2)
-        self.gap_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
-        self.gmp_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
+        # self.gap_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
+        # self.gmp_fc = nn.utils.spectral_norm(Linear(nch_ker*mult,1))
+        self.gap_fc = nn.utils.spectral_norm(nn.Linear(nch_ker*mult,1))
+        self.gmp_fc = nn.utils.spectral_norm(nn.Linear(nch_ker*mult,1))
         self.conv1x1 = Conv2d(nch_ker*mult*2, nch_ker*mult, kernel_size=1, stride=1)
         self.leaky_relu = ReLU(0.2)
 
         self.pad = Padding(1,'reflection')
-        self.conv = nn.utils.spectral_norm(Conv2d(nch_ker*mult, 1, kernel_size=4, stride=1, padding=0))
+        self.conv = nn.utils.spectral_norm(nn.Conv2d(nch_ker*mult, 1, kernel_size=4, stride=1, padding=0))
         self.encblk = nn.Sequential(*encblk)
 
     def forward(self, x):
@@ -208,48 +216,48 @@ class Discriminator(nn.Module):
         return out, cam_logt, heatmap
 
 
-class Discriminator(nn.Module):
-    def __init__(self, nch_in, nch_ker=64, norm='bnorm'):
-        super(Discriminator, self).__init__()
-
-        self.nch_in = nch_in
-        self.nch_ker = nch_ker
-        self.norm = norm
-
-        if norm == 'bnorm':
-            self.bias = False
-        else:
-            self.bias = True
-
-        # dsc1 : 256 x 256 x 3 -> 128 x 128 x 64
-        # dsc2 : 128 x 128 x 64 -> 64 x 64 x 128
-        # dsc3 : 64 x 64 x 128 -> 32 x 32 x 256
-        # dsc4 : 32 x 32 x 256 -> 32 x 32 x 512
-        # dsc5 : 32 x 32 x 512 -> 32 x 32 x 1
-
-        self.dsc1 = CNR2d(1 * self.nch_in,  1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
-        self.dsc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
-        self.dsc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
-        self.dsc4 = CNR2d(4 * self.nch_ker, 8 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
-        self.dsc5 = CNR2d(8 * self.nch_ker, 1,                kernel_size=4, stride=1, padding=1, norm=[],        relu=[], bias=False)
-
-        # self.dsc1 = CNR2d(1 * self.nch_in,  1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
-        # self.dsc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
-        # self.dsc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
-        # self.dsc4 = CNR2d(4 * self.nch_ker, 8 * self.nch_ker, kernel_size=4, stride=1, padding=1, norm=[], relu=0.2)
-        # self.dsc5 = CNR2d(8 * self.nch_ker, 1,                kernel_size=4, stride=1, padding=1, norm=[], relu=[], bias=False)
-
-    def forward(self, x):
-
-        x = self.dsc1(x)
-        x = self.dsc2(x)
-        x = self.dsc3(x)
-        x = self.dsc4(x)
-        x = self.dsc5(x)
-
-        # x = torch.sigmoid(x)
-
-        return x
+# class Discriminator(nn.Module):
+#     def __init__(self, nch_in, nch_ker=64, norm='bnorm'):
+#         super(Discriminator, self).__init__()
+#
+#         self.nch_in = nch_in
+#         self.nch_ker = nch_ker
+#         self.norm = norm
+#
+#         if norm == 'bnorm':
+#             self.bias = False
+#         else:
+#             self.bias = True
+#
+#         # dsc1 : 256 x 256 x 3 -> 128 x 128 x 64
+#         # dsc2 : 128 x 128 x 64 -> 64 x 64 x 128
+#         # dsc3 : 64 x 64 x 128 -> 32 x 32 x 256
+#         # dsc4 : 32 x 32 x 256 -> 32 x 32 x 512
+#         # dsc5 : 32 x 32 x 512 -> 32 x 32 x 1
+#
+#         self.dsc1 = CNR2d(1 * self.nch_in,  1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
+#         self.dsc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
+#         self.dsc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
+#         self.dsc4 = CNR2d(4 * self.nch_ker, 8 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=self.norm, relu=0.2)
+#         self.dsc5 = CNR2d(8 * self.nch_ker, 1,                kernel_size=4, stride=1, padding=1, norm=[],        relu=[], bias=False)
+#
+#         # self.dsc1 = CNR2d(1 * self.nch_in,  1 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
+#         # self.dsc2 = CNR2d(1 * self.nch_ker, 2 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
+#         # self.dsc3 = CNR2d(2 * self.nch_ker, 4 * self.nch_ker, kernel_size=4, stride=2, padding=1, norm=[], relu=0.2)
+#         # self.dsc4 = CNR2d(4 * self.nch_ker, 8 * self.nch_ker, kernel_size=4, stride=1, padding=1, norm=[], relu=0.2)
+#         # self.dsc5 = CNR2d(8 * self.nch_ker, 1,                kernel_size=4, stride=1, padding=1, norm=[], relu=[], bias=False)
+#
+#     def forward(self, x):
+#
+#         x = self.dsc1(x)
+#         x = self.dsc2(x)
+#         x = self.dsc3(x)
+#         x = self.dsc4(x)
+#         x = self.dsc5(x)
+#
+#         # x = torch.sigmoid(x)
+#
+#         return x
 
 
 def init_weights(net, init_type='normal', init_gain=0.02):
@@ -303,3 +311,17 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[], gpu_mode=None)
 
     init_weights(net, init_type, init_gain=init_gain)
     return net
+
+class RhoClipper(object):
+
+    def __init__(self, min, max):
+        self.clip_min = min
+        self.clip_max = max
+        assert min < max
+
+    def __call__(self, module):
+
+        if hasattr(module, 'rho'):
+            w = module.rho.data
+            w = w.clamp(self.clip_min, self.clip_max)
+            module.rho.data = w

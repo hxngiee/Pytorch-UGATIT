@@ -54,9 +54,9 @@ parser.add_argument('--lr_decay_iters', type=int, default=50, dest='lr_decay_ite
 
 # weight init
 parser.add_argument('--wgt_adv', type=float, default=1, dest='wgt_adv', help='Adv Weight')
-parser.add_argument('--wgt_c', type=float, default=10, dest='wgt_c', help='Cam Weight')
-parser.add_argument('--wgt_cyc', type=float, default=10, dest='wgt_c', help='Cycle Weight')
-parser.add_argument('--wgt_i', type=float, default=5e-1, dest='wgt_i', help='Identity weight')
+parser.add_argument('--wgt_c', type=float, default=1000, dest='wgt_c', help='Cam Weight')
+parser.add_argument('--wgt_cyc', type=float, default=10, dest='wgt_cyc', help='Cycle Weight')
+parser.add_argument('--wgt_i', type=float, default=10, dest='wgt_i', help='Identity weight')
 
 parser.add_argument('--optim', default='adam', choices=['sgd', 'adam', 'rmsprop'], dest='optim')
 parser.add_argument('--beta1', default=0.5, dest='beta1')
@@ -78,7 +78,8 @@ parser.add_argument('--nch_ker', type=int, default=64, dest='nch_ker')
 parser.add_argument('--data_type', default='float32', dest='data_type')
 parser.add_argument('--direction', default='A2B', dest='direction')
 
-parser.add_argument('--nblk', type=int, default=6, dest='nblk')
+parser.add_argument('--nblk', type=int, default=4, dest='nblk')
+parser.add_argument('--nblk_D', type=int, default=6, dest='nblk')
 
 PARSER = Parser(parser)
 

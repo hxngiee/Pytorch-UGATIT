@@ -36,8 +36,9 @@ class Train:
         self.lr_G = args.lr_G
         self.lr_D = args.lr_D
 
-        self.wgt_c_a = args.wgt_c_a
-        self.wgt_c_b = args.wgt_c_b
+        self.wgt_adv = args.wgt_adv
+        self.wgt_c = args.wgt_c
+        self.wgt_cyc = args.wgt_cyc
         self.wgt_i = args.wgt_i
 
         self.optim = args.optim
@@ -62,7 +63,8 @@ class Train:
 
         self.gpu_id = args.gpu_id
         self.gpu_devices = args.gpu_devices
-        self.num_workers = args.num_workers * len(self.gpu_devices)
+        self.num_workers = args.num_workers
+        # self.num_workers = args.num_workers * len(self.gpu_devices)
         print('Num of GPU devcies:', self.gpu_devices)
         # self.num_workers = args.num_workers
 
@@ -152,8 +154,9 @@ class Train:
         lr_G = self.lr_G
         lr_D = self.lr_D
 
-        wgt_c_a = self.wgt_c_a
-        wgt_c_b = self.wgt_c_b
+        wgt_adv = self.wgt_adv
+        wgt_c = self.wgt_c
+        wgt_cyc = self.wgt_cyc
         wgt_i = self.wgt_i
 
         batch_size = int(self.batch_size / ngpus_per_node)
@@ -212,13 +215,17 @@ class Train:
         print('==> Making model..')
         netG_a2b = ResNet(nch_in, nch_out, nch_ker, norm, nblk=self.nblk)
         netG_b2a = ResNet(nch_in, nch_out, nch_ker, norm, nblk=self.nblk)
-        netD_a = Discriminator(nch_in, nch_ker, norm)
-        netD_b = Discriminator(nch_in, nch_ker, norm)
+        netD_a = Discriminator(nch_in, nch_ker, n_layers=7)
+        netD_b = Discriminator(nch_in, nch_ker, n_layers=7)
+        netDL_a = Discriminator(nch_in, nch_ker)
+        netDL_b = Discriminator(nch_in, nch_ker)
 
         netG_a2b = init_net(netG_a2b, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
         netG_b2a = init_net(netG_b2a, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
         netD_a = init_net(netD_a, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
         netD_b = init_net(netD_b, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
+        netDL_a = init_net(netDL_a, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
+        netDL_b = init_net(netDL_b, init_type='normal', init_gain=0.02, gpu_ids=gpu, gpu_mode=gpu_mode)
 
         netG_a2b_param = sum(p.numel() for p in netG_a2b.parameters() if p.requires_grad)
         netG_b2a_param = sum(p.numel() for p in netG_b2a.parameters() if p.requires_grad)
